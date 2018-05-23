@@ -1,0 +1,286 @@
+---
+title: "Capstone"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+
+#1. Introduction
+
+As stated in the CITI data science challenge[^1]
+
+>"One of the core assets of a Credit Card industry is the information rich data that is available for millions of its customers! And one such data source is transaction data. Each time a customer uses their card for purchase, a new transaction record is created. On average approximately 120 annual records are created for each active customer. If mined right, this data has the potential to yield incredible insights into customer preferences and lifestyle choices. However, we are faced with one fundamental challenge while using this data, namely the sheer size of the data and the processing power required, in order to mine value from it. This data was not optimally leveraged in the past; however, with better platforms and techniques becoming available, card issuers are increasingly turning towards mining this dataset."
+
+[^1]:  https://www.datascientistchallenge.com This website has seen been taken down. 
+
+###1.1 Objective
+
+
+This data science challenge sought participants to perform the following: 
+
+* Identify the Top 10 merchants that customers have not transacted with in the past 12 months and are likely to transact with, in the next 3 months
+* Recommendations must be personalized at a customer level
+* Using historical data for the particular customer and the rest of the population, identify merchants the customer is likely to interact with
+
+#2 Approach
+
+This data challenge is primarily a recommendation problem, where individual and group data is leveraged to make user-specific recommendations. One of the approaches to this type of problem is collaborative filtering[^2], where sparse data from many users can help inform recommendations. While there are many ways to approach this problem, it is useful to compare the performance of various algorithms and models to see which are the best for the dataset.  
+
+[^2]: https://cran.r-project.org/web/packages/recommenderlab/vignettes/recommenderlab.pdf, pages 4-10
+
+Recommenderlab[^3] is an R software package which allows for the creation, implementation and evaluation of multiple topN recommender algorithms. This package has an in-built registry of some of the most popular algorithms for solving recommender problems including:
+
+* Alternate Least Squares (ALS);
+* Item Based Collaborative Filtering (IBCF);
+* Popularity;
+* Random;
+* Re-recommend;
+* Single Value Decomposition (SVD); and
+* User Based Collaborative Filtering (UBCF)
+
+[^3]: Michael Hahsler (2017). recommenderlab: Lab for Developing and Testing Recommender Algorithms. R package version 0.2-2.http://lyle.smu.edu/IDA/recommenderlab/
+
+By creating a scheme in which all of these different approaches are used and compared, it is possible to find the best in-built algorithm for making recommendations with the given data.  
+
+#3. Implementation
+
+###3.1 Importing and formatting data
+
+The first step is to read in the data and check its structure.
+
+####Import CSV as "WorkData"
+
+```{R}
+WorkData <- read.csv("C:/Users/M/Desktop/R/Capstone/Capstone Credit Card/DataScienceChallenge_Data/DataScienceChallenge_Training.csv")
+str(WorkData)
+```
+
+The  file consists of 18,532,355 observations of five variables. These variables include a customer id, a merchant id, a month of transaction, a category of the merchant, and the number of transactions occurring between a customer and merchant in the month.
+
+Next, it is necessary to load the libraries to analyze the data. 
+
+####Open required libraries and set seed
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(zoo)
+library(reshape2)
+library(arules)
+library(arulesViz)
+library(recommenderlab)
+
+set.seed(1988)
+```
+
+The date information is not in the date class, and the columns could be better named.
+
+####Rename columns and convert date to date format
+
+```{r}
+names(WorkData) <- c("customer_id", "merchant_id", "date", "category", "number_trans")
+WorkData$date <- as.Date(as.yearmon(as.character(WorkData$date), "%Y%m"))
+WorkData <- arrange(WorkData, customer_id, merchant_id, date)
+str(WorkData)
+summary(WorkData)
+sum(WorkData$number_trans)
+```
+
+###3.2 Casting the data for recommender lab
+
+The first step in using recommenderlab is converting the data into a rating matrix, of n customers by m merchants, and the number of transactions as the data intersections. In the case of the dataset involved in the challenge, this would entail creating a 374,334 x 9,822 matrix, or a total of 3,676,708,548 cells. This casting exceeded the capabilities of the present system.
+
+Even attempting to sample 1% of the data exceeded the system's abilities.
+
+###3.3 Casting the data for recommender lab using a subset of data
+
+In order to continue with the project and explore how recommenderlab might be implemented, it was necessary to proceed with a much smaller subset of data, in this case the first 100 customer IDs. Customer IDs were used as the criteria to capture all the interactions a given customer had with merchants, as opposed to other stratification methods, which may have omitted some of this data. 
+
+####Create working data set of first 100 customer IDs "n"#
+
+```{r}
+n <- filter(WorkData, customer_id <= 100)
+str(n)
+summary(n)
+length(unique(n$merchant_id))
+sum(n$number_trans)
+```
+
+Filtering the data to the first 100 customer IDs resulted in 100 customers, 1,549 merchants, and 17,135 interactions. This results in a much more manageable 154,900 cells, though at the loss of including much of the data. 
+
+####Exploring the 100 customer dataset
+
+```{R}
+n %>% 
+ggplot(aes(x=date, y=number_trans)) + 
+geom_col(fill="red")
+
+n %>% 
+ggplot(aes(x=customer_id, y=number_trans)) + 
+geom_col(fill="blue")
+
+n_customer_id <- n %>% group_by(customer_id) %>% summarise( total_number_trans = sum(number_trans)) 
+
+mean(n_customer_id$total_number_trans)
+median(n_customer_id$total_number_trans)
+
+ggplot(n_customer_id, aes(x=customer_id, y=total_number_trans)) +geom_boxplot(fill="blue")
+
+n %>% 
+ggplot(aes(x=customer_id, y=number_trans)) + 
+geom_col(fill="blue") +facet_grid(date~.)
+
+n %>% 
+ggplot(aes(x=merchant_id, y=number_trans)) + 
+geom_col(fill="green")+coord_cartesian(ylim = c(0, 250))
+
+n_merchant_id <- n %>% group_by(merchant_id) %>% summarise( total_number_trans = sum(number_trans)) 
+
+mean(n_merchant_id$total_number_trans)
+median(n_merchant_id$total_number_trans)
+
+filter(n_merchant_id, total_number_trans>11)
+```
+
+Looking briefly at the data, transactions are fairly evenly distributed across all 12 months, with at least 1000 transactions per month. This gives confidence that aggregating the data over the 12 months is not being excessively skewed by any specific month. There seems to be more transactions during the October to January period, suggesting Chrsitmas shopping may correlate with increased transactions. 
+
+When looking at the number of transactions per customer, there appears to be a number of customers with a large amount of transactions, and a lower average number of transactions. Calculating the mean and median of 171.35 transactions and 114.5 transactions respectively. This suggests there are a number of customers who have a higher than average number of transactions. If customer information is faceted by each month, it appears as though transactions habits at the individual customer level are fairly consistent. 
+
+Transaction numbers by merchant seem to suggest some merchants are involved in many more transactions than others. The median and mean number of transactions per merchant are 3 and 11 respectively. Investigating this further, 243/1549 (15.6%) of merchants are involved in a higher than average number of transactions. 
+
+This preliminary exploratory analysis of the data suggests there may be merits in looking at certain market segments and calendar period specifically. However; the remainder of the project will focus on the data challenge. 
+
+####Cast n into customer by merchant matrix with sum of transactions  for recommenderlab
+
+Recommenderlab provides:
+
+> "[...] two concrete implementations realRatingMatrix and binaryRatingMatrix to represent different types of rating matrices R. realRatingMatrix implements a rating matrix with real valued ratings stored in sparse format defined in package Matrix. Sparse matrices in Matrix typically do not store 0s explicitly, however for realRatingMatrix we use these sparse matrices such that instead of 0s, NAs are not explicitly stored."
+
+Therefore, it was necessary to cast the data in the proper format, and also convert all 0s to NAs. 
+
+```{r}
+n$number_trans <- as.numeric(n$number_trans)
+n_cast <- (dcast(n, customer_id ~ merchant_id, sum))
+n_cast <- as.data.frame(n_cast) 
+
+
+row.names(n_cast) <- paste("c",n_cast[,1], sep = "")
+n_cast[,1] <- NULL
+colnames(n_cast) <- paste("m", colnames(n_cast), sep = "")
+n_cast[n_cast == 0] <- NA
+print(n_cast[1:10, 1:10])
+```
+
+####Convert n_cast into a matrix of class matrix
+
+It was found to be essential to convert n_cast into class matrix before proceeding with the next steps.
+
+```{r}
+n_cast <- as.matrix(n_cast)
+str(n_cast)
+```
+
+Once the data is in the proper format, it can be converted to a sparse "realRatingMatrix" matrix for recommender lab.
+
+####Convert n_cast into a sparse matrix for recommenderlab
+
+```{r}
+n_sparse <- as(n_cast, "realRatingMatrix")
+str(n_sparse)
+```
+
+####Prove n_cast and n_sparse are identical
+
+It is possible to prove there was not any loss of data converting into a sparse matrix by proving n_sparse can be converted back into a matrix identical to n_cast
+
+```{r}
+identical(as(n_sparse, "matrix"), n_cast)
+```
+
+It is now possible to use recommenderlabs Recommender function do develop recommendation models using the in-built registry functions. Recommenderlab will normalize each row when normalization is required for the algorithms. 
+
+####Create recommenders in recommenderlab
+
+```{r}
+ALS <- Recommender(n_sparse, method = "ALS")
+ALS_implicit <- Recommender(n_sparse, method = "ALS_implicit")
+IBCF <- Recommender(n_sparse, method = "IBCF")
+popular <- Recommender(n_sparse, method = "POPULAR")
+random <- Recommender(n_sparse, method = "RANDOM")
+rerecommend <- Recommender(n_sparse, method = "RERECOMMEND")
+SVD <- Recommender(n_sparse, method = "SVD")
+SVDF <- Recommender(n_sparse, method = "SVDF")
+UBCF <- Recommender(n_sparse, method = "UBCF")
+```
+
+
+####Evaluation of a topN recommender with RoC and prec/rec curves
+
+Recommenderlab allows for the evaluation and comparison of different recommender algorithms. The scheme below uses a 5-fold cross-validation, all-but-one rating (given=-1), and a goodRating = 2. 
+
+```{r}
+scheme <- evaluationScheme(n_sparse, method="split", train = 0.9, k=5, given=-1, goodRating=2)
+
+algorithms <- list(
+  "ALS" = list(name="ALS"),
+  "ALS implicit" = list(name="ALS_implicit"),
+  "popular items" = list(name="POPULAR", param=NULL),
+  "item-based CF" = list(name="IBCF"),
+  "random items" = list(name="RANDOM", param=NULL),
+  "rercommend" = list(name="RERECOMMEND"),
+  "SVD" = list(name = "SVD"),
+  "SVDF" = list(name = "SVDF"),
+  "user-based CF" = list(name="UBCF", param=(nn=150)))
+
+
+results <- evaluate(scheme, algorithms, type = "topNList",
+                    n=c(1, 3, 5, 10, 15, 20))
+
+plot(results, annotate=c(1,3), legend="bottomright")
+plot(results, "prec/rec", annotate=3,  legend="topleft")
+```
+
+Based on the best performing recommendation algorithm, as determined by best RoC performance, it is possible to make predictions and print them to an output file. In this specific example the True Positive Rate of the ALS implicit algorithm is ~15% for a 10 merchant recommendation and an equivalent False Positive Rate as the other algorithms, making it the best performing algorithm. Therefore, the ALS implicit method was used to make the merchant recommendations. 
+
+####Use best top10 recommenders based on RoC to make customer-specific recommendations#
+
+The objective of this project is to recommend merchants with whom the customer has not transacted with in the past. It should be noted the topNList are based on the predicted values and predicted values are not generated for items already rated by the active users [^3]. Therefore, the following recommendations meet the objective's requirements. 
+
+```{r}
+ALS_implicitp <-predict(ALS_implicit, n_sparse, n=10)
+ALS_implicitp_list <- as(ALS_implicitp, "list")
+
+write.csv(ALS_implicitp_list, file="Top 10 recommendations using the ALS_implicit algorithm.csv")
+```
+
+
+#4 Discussion
+
+The above project shows how recommenderlab can be used to create, compare, and make predictions using various recommendation algorithms in recommenderlab in R. 
+
+###4.1 Limitations
+
+This project faced limitations based on system resources. This was most evident when trying to cast data into the appropriate form, which exceeded the available system RAM. Even stratifying and then casting <1% of the data resulted in an object of between 4-8 Gb, which could then not be manipulated or mined in a reasonable timeframe. While R does have the capacity to do parallel processing[^4], this was not implemented in the current project.
+
+It was also difficult to gauge the objective success of the algorithms given the results are compared to each other, but not to a true baseline. While the re-recommend and random algorithms did not seem to be successful strategies, it is difficult to assess whether the other algorithms actually represented an improvement for the intended application over what CITI may current use. No additional data was provided to test the predictions against. 
+
+[^4]: https://stat.ethz.ch/R-manual/R-devel/library/parallel/doc/parallel.pdf
+
+###4.2 Assumptions
+
+The above implementation of recommenderlab used the number of transactions as a proxy for rating. In addition, it was assumed a good rating was a number of transactions >2. The assumption being if the interaction was not good, a customer would not return to the merchant. It was also assumed there were no refund transactions or fraudulent transactions. These may not be valid assumptions, but it was beyond the scope of the given parameters to assess. 
+
+###4.3 Next Steps
+
+The implemenation of recommenderlab's recommendation algorithms allow for various parameters to be set. Better performance could likely be achieved by optimizing the settings for the most successful algorithms.
+
+Ideally, a system, such as a virtual machine, could be used to implement recommenderlab using all the available data. It would be useful to compare the results using recommenderlab's binary matrix format as opposed to realRatingMatrix to see if the results are different. This implementation could use any interaction as a positive call, and a lack of interaction as a negative call. 
+
+
+Another interesting pursuit could include the use of context-sensitive filtering, which would use additional data (such as the date information) to better inform customer recommendations. The current implementation ignores this data, but it is possible to imagine a situation in which this data would be important. For instance, recommendations to merchants selling plants or garden items might be more relevant in spring than other times of the year. As seen in the exploratory data analysis, there may be increased transactions during the October to January period which may be different from the rest of the year. There may also be certain market segments which are not homogenous with the rest. For instance, certain customer_IDs have higher transaction rates than the average. They may represent different types of clients, such as small business credit cards as opposed to consumers. 
+
+#5 Conclusion
+
+In conclusion, the above implementation of recommenderlab used a subset of credit card transaction data to successfully make better than random predictions of merchant-customer interactions. This satisfied the objectives by providing recommendations at the individual customer level, for merchants whom the customer has not transacted with in previous 12 months, and uses both customer-specific and group data.  
+
